@@ -22,6 +22,7 @@ class ChatMessageHistoryWithContextWindow(BaseChatMessageHistory):
 
     def __init__(self, window_size) -> None:
         super().__init__()
+        self.messages = []
         self.window_size = window_size
 
     def add_user_message(self, message: str, token_length: int) -> None:
@@ -56,6 +57,8 @@ class ChatMessageHistoryWithContextWindow(BaseChatMessageHistory):
             return self.messages[0]
 
     def get_messages_within_window_size(self) -> List[BaseMessage]:
+        if not self.messages:
+            return []
         # Always add system message
         messages = [self.messages[0]]
         current_length = self.messages[0].additional_kwargs["token_length"]
@@ -104,7 +107,7 @@ class ChatMessageHistoryWithLongTerm(ChatMessageHistoryWithContextWindow):
     current_length: int = 0
 
     def __init__(self, host, index, window_size, memory_size) -> None:
-        super().__init__()
+        super().__init__(window_size)
         self.host = host
         self.index = index.lower()
         self.es = Elasticsearch(self.host)
@@ -152,6 +155,8 @@ class ChatMessageHistoryWithLongTerm(ChatMessageHistoryWithContextWindow):
     def get_messages_with_long_term(self) -> List[BaseMessage]:
         # Always add system message
         messages_within_window_size = self.get_messages_within_window_size()
+        if not messages_within_window_size:
+            return []
         messages = [messages_within_window_size[0]]
         long_term = self._get_long_term(self.messages[-1].content)
         if long_term:
@@ -188,7 +193,7 @@ class ChatMessageHistoryWithLongTerm(ChatMessageHistoryWithContextWindow):
         messages = []
         if prompt is not None:
             for line in prompt.split("<EOS>")[:-1]:
-                message_type, content = line.split("|", 2)
+                message_type, content = line.split("|", 1)
                 if message_type == "<USER>":
                     messages.append(HumanMessage(content=content))
                 elif message_type == "<AI>":
