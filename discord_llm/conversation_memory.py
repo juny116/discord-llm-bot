@@ -1,5 +1,4 @@
-from elasticsearch import Elasticsearch
-from typing import Any, List
+from typing import List
 
 from langchain.schema import (
     AIMessage,
@@ -110,7 +109,7 @@ class ChatMessageHistoryWithLongTerm(ChatMessageHistoryWithContextWindow):
         super().__init__(window_size)
         self.host = host
         self.index = index.lower()
-        self.es = Elasticsearch(self.host)
+        self.es = create_search_client(self.host)
         self.create_index()
         self.window_size = window_size
         self.memory_size = memory_size
@@ -165,6 +164,12 @@ class ChatMessageHistoryWithLongTerm(ChatMessageHistoryWithContextWindow):
         messages.extend(messages_within_window_size[1:])
 
         return messages
+
+    def save_long_term(self):
+        return self._save_long_term()
+
+    def get_long_term(self, query):
+        return self._get_long_term(query)
 
     def _save_long_term(self) -> None:
         print("Saving long term")
@@ -228,30 +233,7 @@ class ChatMessageHistoryWithLongTerm(ChatMessageHistoryWithContextWindow):
         return self._messages_to_prompt(messages)
 
 
-if __name__ == "__main__":
-    from time import sleep
+def create_search_client(host):
+    from elasticsearch import Elasticsearch
 
-    es = Elasticsearch("localhost:9200")
-    index = "test_index"
-    if es.indices.exists(index=index):
-        pass
-    else:
-        es.indices.create(index=index)
-    query = "dinner menus"
-    # req_body = {"query":{"match_all":{}}}
-    req_body = {
-        "query": {
-            "multi_match": {
-                "query": query,
-            }
-        }
-    }
-    doc = {"log": "I will have hamberger for dinner."}
-    temp = es.index(index=index, doc_type="_doc", body=doc, id=0)
-    doc = {"log": "I had pizza for lunch."}
-    sleep(1)
-    res = es.search(
-        search_type="dfs_query_then_fetch", index=index, body=req_body, size=5
-    )
-    print(res["hits"]["hits"])
-    es.indices.delete(index=index, ignore=[400, 404])
+    return Elasticsearch(host)

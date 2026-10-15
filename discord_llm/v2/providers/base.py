@@ -1,4 +1,4 @@
-from abc import ABC, abstractmethod, ABCMeta
+from abc import ABCMeta, abstractmethod
 
 
 class APIModel(metaclass=ABCMeta):

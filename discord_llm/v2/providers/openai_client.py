@@ -1,6 +1,8 @@
 from typing import Any
-from openai import OpenAI, AsyncOpenAI
-from .api_model import APIModel
+
+from openai import AsyncOpenAI, OpenAI
+
+from .base import APIModel
 
 
 class OpenAIGPT(APIModel):

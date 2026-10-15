@@ -1,37 +1,38 @@
-from langchain.prompts.chat import (
-    ChatPromptTemplate,
-    SystemMessagePromptTemplate,
-    AIMessagePromptTemplate,
-    HumanMessagePromptTemplate,
-)
-from langchain.schema import (
-    messages_from_dict,
-    messages_to_dict,
-)
-from langchain.memory import ChatMessageHistory
+import asyncio
+import json
+from pathlib import Path
 
 import discord
-import requests
-from discord.utils import escape_mentions, remove_markdown
-import json
-from models import load_model
-from utils import (
-    remove_mention,
+from langchain.prompts.chat import (
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import (
+    messages_to_dict,
+)
+
+from discord_llm.conversation_memory import (
+    ChatMessageHistoryWithContextWindow,
+    ChatMessageHistoryWithLongTerm,
+)
+from discord_llm.message_formatting import (
+    add_author,
     convert_id_to_name,
     convert_name_to_id,
-    add_author,
     remove_author,
+    remove_mention,
 )
-from memory import ChatMessageHistoryWithContextWindow, ChatMessageHistoryWithLongTerm
-import hydra
-from omegaconf import DictConfig
 
 
 class LLMBot(discord.Client):
-    def __init__(self, config, intents):
+    def __init__(self, config, intents, model_factory=None):
         super().__init__(intents=intents)
         self.config = config
-        self.model = load_model(self.config["model"])
+        if model_factory is None:
+            from discord_llm.v1.model_backends import load_model
+
+            model_factory = load_model
+        self.model = model_factory(self.config["model"])
+        self.message_lock = asyncio.Lock()
 
     def create_user_dict(self):
         if self.config["discord"].get("channel_id"):
@@ -60,7 +61,7 @@ class LLMBot(discord.Client):
         if long_term:
             self.history.delete_index()
             self.history.create_index()
-        
+
     def renew_system(self, add_prompt=""):
         system_message_prompt = SystemMessagePromptTemplate.from_template(
             self.config["template"]["system"]
@@ -81,6 +82,7 @@ class LLMBot(discord.Client):
             fname = f"{save_path}/{self.user.name}{fname}.json"
         except:
             fname = f"{save_path}/{self.user.name}.json"
+        Path(fname).parent.mkdir(parents=True, exist_ok=True)
         with open(fname, "w") as f:
             json.dump(messages_to_dict(self.history.messages), f)
 
@@ -93,17 +95,26 @@ class LLMBot(discord.Client):
         self.create_user_dict()
         if self.config["long_term_memory"]:
             self.history = ChatMessageHistoryWithLongTerm(
-                self.config["host"], self.user.name, self.config["window_size"], self.config["memory_size"]
+                self.config["host"],
+                self.user.name,
+                self.config["window_size"],
+                self.config["memory_size"],
             )
         else:
             print("No long term memory")
-            self.history = ChatMessageHistoryWithContextWindow(self.config["window_size"])
+            self.history = ChatMessageHistoryWithContextWindow(
+                self.config["window_size"]
+            )
         self.renew_system()
         await self.change_presence(
             status=discord.Status.online, activity=discord.Game("대기중")
         )
 
     async def on_message(self, message):
+        async with self.message_lock:
+            await self.handle_message(message)
+
+    async def handle_message(self, message):
         # Do not respond to ourselves
         if message.author == self.user:
             return
@@ -116,6 +127,14 @@ class LLMBot(discord.Client):
             if self.user.mentioned_in(message):
                 # remove mention from the message to get the command
                 content = remove_mention(message.content).strip()
+                needs_search = content.startswith(("!memorize", "!get")) or (
+                    content.startswith("!clear") and "long_term" in content
+                )
+                if needs_search and not self.config["long_term_memory"]:
+                    await message.channel.send(
+                        "*** Long-term memory is not enabled. ***"
+                    )
+                    return
 
                 if content.startswith("!clear"):
                     if "long_term" in content:
@@ -159,7 +178,7 @@ class LLMBot(discord.Client):
                     max_tokens = content.split(" ")[-1]
                     self.history.window_size = int(max_tokens)
                     await message.channel.send(
-                        f"*** Max token lenght set to {self.history.max_length} ***"
+                        f"*** Max token lenght set to {self.history.window_size} ***"
                     )
 
                 elif content.startswith("!ping"):
@@ -184,8 +203,8 @@ class LLMBot(discord.Client):
                     self.current_turn += 1
                     num_token = self.model.get_num_tokens(content)
                     self.history.add_user_message(content, num_token)
-                    response, token_length = self.model.generate(
-                        self.history, self.user.name
+                    response, token_length = await asyncio.to_thread(
+                        self.model.generate, self.history, self.user.name
                     )
                     # remove author from the message to send chat without author
                     response = remove_author(self.user.name, response)
@@ -198,14 +217,3 @@ class LLMBot(discord.Client):
             else:
                 num_token = self.model.get_num_tokens(content)
                 self.history.add_user_message(content, num_token)
-
-
-@hydra.main(version_base=None, config_path="conf", config_name="config")
-def main(config: DictConfig) -> None:
-    intents = discord.Intents.all()
-    client = LLMBot(config=config, intents=intents)
-    client.run(config["discord"]["token"])
-
-
-if __name__ == "__main__":
-    main()

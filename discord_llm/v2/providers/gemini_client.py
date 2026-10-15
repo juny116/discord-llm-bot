@@ -1,9 +1,9 @@
 from typing import Any
 
 import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
+from google.generativeai.types import HarmBlockThreshold, HarmCategory
 
-from .api_model import APIModel
+from .base import APIModel
 
 
 class GoogleGemini(APIModel):
